@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>ros_automatic_parking</name>
+  <version>1.1.0</version>
+  <description>
+    Package for automatic parking for mobile robots
+  </description>
+  <license>" "</license>
+  <maintainer email="andrbanga@gmail.com">Andrey Taratin</maintainer>
+  <author email="andrbanga@gmail.com">Andrey Taratin</author>
+  <author>Andrey Taratin</author>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>ar_track_alvar_msgs</depend>
+  <depend>ar_track_alvar</depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rviz</exec_depend>
+  <exec_depend>turtlebot3_bringup</exec_depend>
+</package>

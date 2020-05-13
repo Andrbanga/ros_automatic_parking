@@ -1,0 +1,459 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+import math
+import time
+
+import rospy
+import tf
+import actionlib
+
+from enum import Enum
+from nav_msgs.msg import Odometry
+from ar_track_alvar_msgs.msg import AlvarMarkers
+from geometry_msgs.msg import Twist, PoseWithCovarianceStamped
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from std_msgs.msg import String
+from sensor_msgs.msg import LaserScan
+from courier_msgs.msg import *
+
+from visualization_msgs.msg import Marker
+import matplotlib.pyplot as plt
+import numpy as np
+
+class AutomaticParking():
+    
+    def __init__(self):
+        rospy.on_shutdown(self.fnShutDown)
+        self.marker_poses = []
+        self.real_merker_poses = []
+        self.errors = []
+        self.errors1 = [0.007548899494937644, 0.006713483181591706, 0.005828366684761277, 0.004693270986024567, 0.003063606715549505, 0.002476424115999687, 0.002748016087055438, 0.0005873972353621637, 0.0014236993563592204, 0.0021457893519410964, 0.002627298012268131, 0.0033970050458910217, 0.005992495919539431, 0.012617287579211656, 0.004899237574589765, 0.0015119160000605092, 0.007006198570025157, 0.01047742538527463, 0.005329914945622072, 0.0010604045029405373]
+        self.errors2 = [0.02119670342572738, 0.020408401397389864, 0.018738537443312775, 0.018300060036223142, 0.017288370515666895, 0.015279824360075911, 0.014335834385965862, 0.010929706929311944, 0.012766563917913754, 0.012299648107349292, 0.009789505600033999, 0.009421098837028019, 0.012238183967734573, 0.012249899778077333, 0.0009412647296902499, 0.013452582550342873, 0.002824519693053862, 0.009357180213276362, 0.012160809322712574, 0.009187998004654307, 0.0008036956589383415, 0.009995321667813029]
+        for i in np.arange(0.35,1.80,0.05):
+            i = round(i, 2)
+            self.spawn_charge(i)
+            try:
+                marker = rospy.wait_for_message("/ar_pose_marker", AlvarMarkers, 5)
+                if len(marker.markers) != 0:
+                    self.marker_poses.append(i)
+                    self.real_merker_poses.append(marker.markers[0].pose.pose.position.x)     
+                    self.errors.append(abs(i - marker.markers[0].pose.pose.position.x))
+            except:
+                self.delete_model()
+                break  
+            self.delete_model()
+        print('error')
+        print(self.real_merker_poses)
+        print("dist")
+        print(self.marker_poses)
+        plt.plot(self.marker_poses, self.errors)
+        plt.ylabel("error")
+        plt.xlabel("dist")
+        plt.show()
+        # init subscribers and publishers
+        self.sub_odom_robot = rospy.Subscriber('/odom_server', Odometry, self.cbGetRobotOdom, queue_size = 1)
+        self.sub_info_marker = rospy.Subscriber('/ar_pose_marker', AlvarMarkers, self.cbGetMarkerOdom, queue_size = 1)
+        self.sub_bumper_status = rospy.Subscriber('/bumper_info', String, self.cbBumperInfo, queue_size=1)
+        self.sub_laser_scan = rospy.Subscriber('/scan', LaserScan, self.cbLaserScan, queue_size=1)
+        self.pub_cmd_vel = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+        # init params
+        self.Kp = rospy.get_param("~/Kp", default=1.2)
+        self.park_distance = rospy.get_param("~/park_distance", default=0.15)
+        self.courier_mode = rospy.get_param("~/courier_mode", default=False)
+        self.dock_marker_id = rospy.get_param("~/dock_marker_id", default=17)
+        # init states
+        self.ParkingSequence = Enum('ParkingSequence', 'searching_parking_lot changing_direction moving_nearby_parking_lot parking stop finished')
+        self.NearbySequence = Enum('NearbySequence', 'initial_turn go_straight turn_right parking')
+        # init poses
+        self.robot_2d_pose_x = .0
+        self.robot_2d_pose_y = .0
+        self.robot_2d_theta = .0
+        self.marker_2d_pose_x = .0
+        self.marker_2d_pose_y = .0
+        self.marker_2d_theta = .0
+
+        self.previous_robot_2d_theta = .0
+        self.total_robot_2d_theta = .0
+        self.is_triggered = False
+        # init finish state flag
+        self.is_sequence_finished = False
+        # init recieved data flags
+        self.is_odom_received = False
+        self.is_marker_pose_received = False
+        self.is_bumper_pressed = False
+        self.is_obstacle = False
+
+        self.loop_rate = rospy.Rate(10) # 10hz
+
+        self.timer = 0
+
+        rospy.sleep(0.1)
+
+        # init action server
+        self._as = actionlib.SimpleActionServer("/courier_docking", CourierDockingAction, execute_cb = self.fnParking, auto_start=False)
+        self._feedback = CourierDockingFeedback()
+        self._result = CourierDockingResult()
+        self._as.start()
+
+        
+# robot odom callback get robot pose and angle
+    def cbGetRobotOdom(self, robot_odom_msg):
+        if self.is_odom_received == False:
+            self.is_odom_received = True 
+        # write robot pose to class vars
+        # amcl_odom = rospy.wait_for_message("/amcl_pose", PoseWithCovarianceStamped)
+        # print("so")
+        self.robot_2d_pose_x, self.robot_2d_pose_y, self.robot_2d_theta = self.fnGet2DRobotPose(robot_odom_msg)
+
+        if (self.robot_2d_theta - self.previous_robot_2d_theta) > 5.:
+            d_theta = (self.robot_2d_theta - self.previous_robot_2d_theta) - 2 * math.pi
+        elif (self.robot_2d_theta - self.previous_robot_2d_theta) < -5.:
+            d_theta = (self.robot_2d_theta - self.previous_robot_2d_theta) + 2 * math.pi
+        else:
+            d_theta = (self.robot_2d_theta - self.previous_robot_2d_theta)
+
+        self.total_robot_2d_theta = self.total_robot_2d_theta + d_theta
+        self.previous_robot_2d_theta = self.robot_2d_theta
+
+        self.robot_2d_theta = self.total_robot_2d_theta
+
+# aruco marker pose callback 
+    def cbGetMarkerOdom(self, markers_odom_msg):
+        for marker_odom_msg in markers_odom_msg.markers:
+            if marker_odom_msg.id == self.dock_marker_id:
+                self.is_marker_pose_received = True
+                # write marker pose to class vars
+                self.marker_2d_pose_x, self.marker_2d_pose_y, self.marker_2d_theta = self.fnGet2DMarkerPose(marker_odom_msg)
+
+# bamper info callback
+    def cbBumperInfo(self, bumper_info):
+        self.is_bumper_pressed = False
+        if bumper_info.text != "No bumpers":
+            self.is_bumper_pressed = True
+
+# laser scan callback
+    def cbLaserScan(self, laser_data):
+        ang = laser_data.angle_min
+        self.is_obstacle = False
+        # check if obstacle is in the sector
+        for dist in laser_data.ranges:
+            if laser_data.angle_min + math.pi - 0.78 < ang < laser_data.angle_min + math.pi + 0.78:
+                # check sector range and nearby marker
+                if dist < 0.6 and dist != 0.0 and self.marker_2d_pose_x > 0.3:
+                    self.is_obstacle = True
+            ang += laser_data.angle_increment
+
+        
+# main parking action server state machine
+    def fnParking(self, goal):
+        self._result.is_docked = False
+        self.current_nearby_sequence = self.NearbySequence.initial_turn.value
+        self.current_parking_sequence = self.ParkingSequence.searching_parking_lot.value
+
+        while self._result.is_docked != True:
+            # obstacle state
+            if self.is_obstacle:
+                self.fnStop()
+                rospy.loginfo("Obstacle behind robot")
+                self._feedback.status = "Obstacle behind robot"
+                self._as.publish_feedback(self._feedback)
+            # bamper pressed state
+            elif self.is_bumper_pressed:
+                self.fnStop()
+                rospy.loginfo("Bumper had pressed")
+                self._feedback.status = "Bumper had pressed"
+                self._as.publish_feedback(self._feedback)
+            # searching marker state
+            elif self.current_parking_sequence == self.ParkingSequence.searching_parking_lot.value:
+                self.is_sequence_finished = self.fnSeqSearchingGoal()
+                
+                if self.is_sequence_finished == True:
+                    rospy.loginfo("Searching marker finished")
+                    self._feedback.status = "Searching marker finished"
+                    self._as.publish_feedback(self._feedback)
+                    rospy.loginfo("Changing direction")
+                    self._feedback.status = "Changing direction"
+                    self._as.publish_feedback(self._feedback)
+                    self.current_parking_sequence = self.ParkingSequence.changing_direction.value
+                    self.is_sequence_finished = False
+                else:
+                    return
+            # changing direction state
+            elif self.current_parking_sequence == self.ParkingSequence.changing_direction.value:
+                self.is_sequence_finished = self.fnSeqChangingDirection()
+                
+                if self.is_sequence_finished == True:
+                    rospy.loginfo("Changing direction finished")
+                    self._feedback.status = "Changing direction finished"
+                    self._as.publish_feedback(self._feedback)
+                    rospy.loginfo("Start moving parking")
+                    self._feedback.status = "Start moving parking"
+                    self._as.publish_feedback(self._feedback)
+                    self.current_parking_sequence = self.ParkingSequence.moving_nearby_parking_lot.value
+                    self.is_sequence_finished = False
+            # moving nearby parking state
+            elif self.current_parking_sequence == self.ParkingSequence.moving_nearby_parking_lot.value:
+                self.is_sequence_finished = self.fnSeqMovingNearbyParkingLot()
+                
+                if self.is_sequence_finished == True:
+                    rospy.loginfo("Moving nearby parking finished")
+                    self._feedback.status = "Moving nearby parking finished"
+                    self._as.publish_feedback(self._feedback)
+                    rospy.loginfo("Start parking")
+                    self._feedback.status = "Start parking"
+                    self._as.publish_feedback(self._feedback)
+                    self.current_parking_sequence = self.ParkingSequence.parking.value
+                    self.is_sequence_finished = False
+            # parking state
+            elif self.current_parking_sequence == self.ParkingSequence.parking.value:
+                self.is_sequence_finished = self.fnSeqParking()
+                
+                if self.is_sequence_finished == True:
+                    self.current_parking_sequence = self.ParkingSequence.stop.value
+                    self.is_sequence_finished = False
+            # finish state
+            elif self.current_parking_sequence == self.ParkingSequence.stop.value:
+                self.fnStop()
+                rospy.loginfo("Parking finished")
+                self._feedback.status = "Parking finished"
+                self._as.publish_feedback(self._feedback)
+                self.current_parking_sequence = self.ParkingSequence.finished.value
+                self._result.is_docked = True
+                self._as.set_succeeded(self._result)
+
+            self.loop_rate.sleep()
+
+    # searcing marker function
+    def fnSeqSearchingGoal(self):
+        timer = time.time() + 60
+        while self.is_marker_pose_received is False:
+            print('searching')
+            self.desired_angle_turn = -0.6
+            self.fnTurn(self.desired_angle_turn)
+            rospy.sleep(1)
+            self.fnStop()
+            rospy.sleep(0.2)
+            if time.time() > timer:
+                self._as.set_aborted(self._result)
+                rospy.loginfo("No markers found after 60 second")
+                return False
+        self.fnStop()
+        return True
+    # changing direction function
+    def fnSeqChangingDirection(self):
+        desired_angle_turn = -1. *  math.atan2(self.marker_2d_pose_y - 0, self.marker_2d_pose_x - 0)
+
+        self.fnTurn(desired_angle_turn)
+        
+        if abs(desired_angle_turn) < 0.01:
+            self.fnStop()
+            return True
+        else:
+            return False
+    # moving nearby parking function
+    def fnSeqMovingNearbyParkingLot(self):
+        if self.current_nearby_sequence == self.NearbySequence.initial_turn.value:
+            if self.is_triggered == False:
+                self.is_triggered = True
+                # set init robot and merker pose
+                self.initial_robot_pose_theta = self.robot_2d_theta
+                self.initial_robot_pose_x = self.robot_2d_pose_x
+                self.initial_robot_pose_y = self.robot_2d_pose_y
+                self.initial_marker_pose_theta = self.marker_2d_theta
+                self.initial_marker_pose_x = self.marker_2d_pose_x
+
+            # if marker right turn 90 right, if marker left turn 90 left
+            if self.initial_marker_pose_theta < 0.0:
+                desired_angle_turn = (math.pi / 2.0) + self.initial_marker_pose_theta - (self.robot_2d_theta - self.initial_robot_pose_theta)
+            elif self.initial_marker_pose_theta > 0.0:
+                desired_angle_turn = -(math.pi / 2.0) + self.initial_marker_pose_theta - (self.robot_2d_theta - self.initial_robot_pose_theta)
+
+            desired_angle_turn = -1. * desired_angle_turn
+
+            self.fnTurn(desired_angle_turn)
+
+            # check turn angle threshold
+            if abs(desired_angle_turn) < 0.05:
+                self.fnStop()
+                self.current_nearby_sequence = self.NearbySequence.go_straight.value
+                self.is_triggered = False
+
+        elif self.current_nearby_sequence == self.NearbySequence.go_straight.value:
+            dist_from_start = self.fnCalcDistPoints(self.initial_robot_pose_x, self.robot_2d_pose_x, self.initial_robot_pose_y, self.robot_2d_pose_y)
+
+            desired_dist = self.initial_marker_pose_x * abs(math.cos((math.pi / 2.) - self.initial_marker_pose_theta))
+            remained_dist = desired_dist - dist_from_start
+            self.fnGoStraight()
+            if remained_dist < 0.01:
+                self.fnStop()
+                self.current_nearby_sequence = self.NearbySequence.turn_right.value
+        # return init angle
+        elif self.current_nearby_sequence == self.NearbySequence.turn_right.value:
+            if self.is_triggered == False:
+                self.is_triggered = True
+                self.initial_robot_pose_theta = self.robot_2d_theta
+
+            if self.initial_marker_pose_theta > 0.0:
+                desired_angle_turn = -(math.pi / 2.0) + (self.robot_2d_theta - self.initial_robot_pose_theta)
+            elif self.initial_marker_pose_theta < 0.0:
+                desired_angle_turn = (math.pi / 2.0) + (self.robot_2d_theta - self.initial_robot_pose_theta)
+
+            self.fnTurn(desired_angle_turn)
+
+            if abs(desired_angle_turn) < 0.05:
+                self.fnStop()
+                self.current_nearby_sequence = self.NearbySequence.parking.value
+                self.is_triggered = False
+                return True
+
+        return False
+
+    # perking function
+    def fnSeqParking(self):
+        desired_angle_turn = math.atan2(self.marker_2d_pose_y - 0, self.marker_2d_pose_x - 0)
+        self.fnTrackMarker(-desired_angle_turn)
+        
+        if abs(self.marker_2d_pose_x) < self.park_distance:
+            self.fnStop()
+            return True
+        else:
+            return False
+    # stop function
+    def fnStop(self):
+        twist = Twist()
+        twist.linear.x = 0
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = 0
+        self.pub_cmd_vel.publish(twist)
+    # turn function
+    def fnTurn(self, theta):
+
+        angular_z = self.Kp * theta
+        if self.courier_mode:
+            angular_z = self.Kp * theta * self.Kp
+            
+        if angular_z > 0.5:
+            angular_z = 0.5
+        if angular_z < -0.5:
+            angular_z = -0.5
+
+        twist = Twist()
+        twist.linear.x = 0
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = -angular_z
+        self.pub_cmd_vel.publish(twist)
+    # go backward function
+    def fnGoStraight(self):
+        twist = Twist()
+        twist.linear.x = 0.2
+        if self.courier_mode:
+            twist.linear.x = -0.1
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = 0
+        self.pub_cmd_vel.publish(twist)
+    # track marker function
+    def fnTrackMarker(self, theta):
+
+        angular_z = self.Kp * theta
+        if angular_z > 0.5:
+            angular_z = 0.5
+        if angular_z < -0.5:
+            angular_z = -0.5
+        linear = (self.marker_2d_pose_x - 0.15) * 0.2
+        if linear < 0.02:
+            linear = 0.02
+        twist = Twist()
+        twist.linear.x = 0.10
+        if self.courier_mode:
+            twist.linear.x = -linear
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = -angular_z
+        self.pub_cmd_vel.publish(twist)      
+
+    def fnGet2DRobotPose(self, robot_odom_msg):
+        quaternion = (robot_odom_msg.pose.pose.orientation.x, robot_odom_msg.pose.pose.orientation.y, robot_odom_msg.pose.pose.orientation.z, robot_odom_msg.pose.pose.orientation.w)
+        theta = tf.transformations.euler_from_quaternion(quaternion)[2]
+
+        if theta < 0:
+            theta = theta + math.pi * 2
+        if theta > math.pi * 2:
+            theta = theta - math.pi * 2
+
+        pos_x = robot_odom_msg.pose.pose.position.x
+        pos_y = robot_odom_msg.pose.pose.position.y
+
+        return pos_x, pos_y, theta
+
+    def fnGet2DMarkerPose(self, marker_odom_msg):
+        quaternion = (marker_odom_msg.pose.pose.orientation.x, marker_odom_msg.pose.pose.orientation.y, marker_odom_msg.pose.pose.orientation.z, marker_odom_msg.pose.pose.orientation.w)
+        theta = tf.transformations.euler_from_quaternion(quaternion)[2]
+
+        theta = theta + math.pi / 2.
+
+        if theta < 0:
+            theta = theta + math.pi * 2
+        if theta > math.pi * 2:
+            theta = theta - math.pi * 2
+
+        pos_x = marker_odom_msg.pose.pose.position.x
+        pos_y = marker_odom_msg.pose.pose.position.y
+
+        return pos_x, pos_y, theta
+
+    def fnCalcDistPoints(self, x1, x2, y1, y2):
+        return math.sqrt((x1 - x2) ** 2. + (y1 - y2) ** 2.)
+
+    def fnShutDown(self):
+        rospy.loginfo("Shutting down. cmd_vel will be 0")
+
+        twist = Twist()
+        twist.linear.x = 0
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = 0
+        self.pub_cmd_vel.publish(twist)
+
+    def spawn_charge(self, dist):
+        from gazebo_msgs.srv import SpawnModel
+        from geometry_msgs.msg import Pose
+        print(dist)
+
+        initial_pose = Pose()
+        initial_pose.position.x = 0
+        initial_pose.position.y = - dist - 0.38 # 5.25 - 0 m
+        f = open('/home/andrey/.gazebo/models/charge/model.sdf','r')
+        sdff = f.read()
+
+        rospy.wait_for_service('gazebo/spawn_sdf_model')
+        spawn_model_prox = rospy.ServiceProxy('gazebo/spawn_sdf_model', SpawnModel)
+        spawn_model_prox("Charge", sdff, "Charge_space", initial_pose, "world") 
+
+    def delete_model(self):
+        from gazebo_msgs.srv import DeleteModel
+        model_name = "Charge"
+        
+        rospy.wait_for_service('gazebo/delete_model')
+        delete_model_prox = rospy.ServiceProxy('gazebo/delete_model', DeleteModel)
+        delete_model_prox(model_name) 
+
+    def main(self):
+        rospy.spin()
+
+if __name__ == '__main__':
+    rospy.init_node('automatic_parking')
+    node = AutomaticParking()
+    node.main()

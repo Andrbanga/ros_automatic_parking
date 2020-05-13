@@ -1,0 +1,18 @@
+<launch>
+
+	<node pkg="ar_track_alvar" type="individualMarkersNoKinect" name="ar_track_alvar" respawn="false" output="screen">
+		<param name="marker_size"           type="double" value="9.0" />
+		<param name="max_new_marker_error"  type="double" value="0.08" />
+		<param name="max_track_error"       type="double" value="0.2" />
+		<param name="output_frame"          type="string" value="/camera_down_link" />
+
+		<remap from="camera_image"  to="/courier/camera_down/image_raw" />
+		<remap from="camera_info"   to="/courier/camera_down/camera_info" />
+	</node>
+
+  <node pkg="ros_automatic_parking" type="automatic_parking" name="automatic_parking" output="screen"/>
+		<param name="Kp" value="0.8" />
+		<param name="courier_mode" value="True" />
+		<param name="park_distance" value="0.18" />
+		<param name="dock_marker_id" value="17" />
+</launch>
