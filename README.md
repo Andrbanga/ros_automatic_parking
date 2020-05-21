@@ -1,1 +1,5 @@
-roslaunch courier_bringup courier_gazebo_all.launch is_disinfector_pilot_mode:=true use_rviz:=true map:=disinfection_gazebo x_pos:=0 y_pos:=0 a_pos:=1.57079
+roslaunch courier_bringup courier_gazebo_all.launch is_disinfector_pilot_mode:=true use_rviz:=true map:=disinfection_gazebo x_pos:=0 y_pos:=0 a_pos:=0
+
+
+[-0.10985761593715662, -0.11426230933662057, 0.19392126931829298, 0.2215402555948297, 0.20109262693044536, -0.08449389429603757]
+[0.11418697601386098, -0.015305984287706364, -0.061445845282530935, -0.10715963273518263, -0.09143366794160276, 0.16457102020166825]

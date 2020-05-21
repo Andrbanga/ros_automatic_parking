@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 import math
 import time
@@ -14,42 +14,27 @@ from geometry_msgs.msg import Twist, PoseWithCovarianceStamped
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from std_msgs.msg import String
 from sensor_msgs.msg import LaserScan
-from courier_msgs.msg import *
+from ros_automatic_parking.msg import *
 
 from visualization_msgs.msg import Marker
+from gazebo_msgs.srv import SetModelState
+from gazebo_msgs.msg import ModelState
+from gazebo_msgs.srv import DeleteModel 
+from gazebo_msgs.srv import SpawnModel
+from geometry_msgs.msg import Pose, PoseStamped, TransformStamped
+import random
 import matplotlib.pyplot as plt
+# from mpl_toolkits.mplot3d import Axes3D
+import plotly.graph_objects as go
 import numpy as np
 
 class AutomaticParking():
     
     def __init__(self):
         rospy.on_shutdown(self.fnShutDown)
-        self.marker_poses = []
-        self.real_merker_poses = []
-        self.errors = []
-        self.errors1 = [0.007548899494937644, 0.006713483181591706, 0.005828366684761277, 0.004693270986024567, 0.003063606715549505, 0.002476424115999687, 0.002748016087055438, 0.0005873972353621637, 0.0014236993563592204, 0.0021457893519410964, 0.002627298012268131, 0.0033970050458910217, 0.005992495919539431, 0.012617287579211656, 0.004899237574589765, 0.0015119160000605092, 0.007006198570025157, 0.01047742538527463, 0.005329914945622072, 0.0010604045029405373]
-        self.errors2 = [0.02119670342572738, 0.020408401397389864, 0.018738537443312775, 0.018300060036223142, 0.017288370515666895, 0.015279824360075911, 0.014335834385965862, 0.010929706929311944, 0.012766563917913754, 0.012299648107349292, 0.009789505600033999, 0.009421098837028019, 0.012238183967734573, 0.012249899778077333, 0.0009412647296902499, 0.013452582550342873, 0.002824519693053862, 0.009357180213276362, 0.012160809322712574, 0.009187998004654307, 0.0008036956589383415, 0.009995321667813029]
-        for i in np.arange(0.35,1.80,0.05):
-            i = round(i, 2)
-            self.spawn_charge(i)
-            try:
-                marker = rospy.wait_for_message("/ar_pose_marker", AlvarMarkers, 5)
-                if len(marker.markers) != 0:
-                    self.marker_poses.append(i)
-                    self.real_merker_poses.append(marker.markers[0].pose.pose.position.x)     
-                    self.errors.append(abs(i - marker.markers[0].pose.pose.position.x))
-            except:
-                self.delete_model()
-                break  
-            self.delete_model()
-        print('error')
-        print(self.real_merker_poses)
-        print("dist")
-        print(self.marker_poses)
-        plt.plot(self.marker_poses, self.errors)
-        plt.ylabel("error")
-        plt.xlabel("dist")
-        plt.show()
+
+        self.experiment()
+        
         # init subscribers and publishers
         self.sub_odom_robot = rospy.Subscriber('/odom_server', Odometry, self.cbGetRobotOdom, queue_size = 1)
         self.sub_info_marker = rospy.Subscriber('/ar_pose_marker', AlvarMarkers, self.cbGetMarkerOdom, queue_size = 1)
@@ -86,14 +71,15 @@ class AutomaticParking():
         self.loop_rate = rospy.Rate(10) # 10hz
 
         self.timer = 0
-
-        rospy.sleep(0.1)
-
+        # rospy.sleep(0.1)
+        
         # init action server
-        self._as = actionlib.SimpleActionServer("/courier_docking", CourierDockingAction, execute_cb = self.fnParking, auto_start=False)
-        self._feedback = CourierDockingFeedback()
-        self._result = CourierDockingResult()
+        self._as = actionlib.SimpleActionServer("/parking", parkingAction, execute_cb = self.fnParking, auto_start=False)
+        self._feedback = parkingFeedback()
+        self._result = parkingResult()
+        
         self._as.start()
+        
 
         
 # robot odom callback get robot pose and angle
@@ -146,6 +132,7 @@ class AutomaticParking():
         
 # main parking action server state machine
     def fnParking(self, goal):
+        
         self._result.is_docked = False
         self.current_nearby_sequence = self.NearbySequence.initial_turn.value
         self.current_parking_sequence = self.ParkingSequence.searching_parking_lot.value
@@ -242,9 +229,8 @@ class AutomaticParking():
     # changing direction function
     def fnSeqChangingDirection(self):
         desired_angle_turn = -1. *  math.atan2(self.marker_2d_pose_y - 0, self.marker_2d_pose_x - 0)
-
+        print(desired_angle_turn)
         self.fnTurn(desired_angle_turn)
-        
         if abs(desired_angle_turn) < 0.01:
             self.fnStop()
             return True
@@ -259,8 +245,18 @@ class AutomaticParking():
                 self.initial_robot_pose_theta = self.robot_2d_theta
                 self.initial_robot_pose_x = self.robot_2d_pose_x
                 self.initial_robot_pose_y = self.robot_2d_pose_y
-                self.initial_marker_pose_theta = self.marker_2d_theta
+                self.initial_marker_pose_theta =self.marker_2d_theta
                 self.initial_marker_pose_x = self.marker_2d_pose_x
+                # marker_thetas = []
+                # marker_poses = []
+                # for i in range(10):
+                #     marker_thetas.append(self.marker_2d_theta)
+                #     marker_poses.append(self.marker_2d_pose_x)
+                #     print(self.marker_2d_theta)
+                #     time.sleep(0.1)
+                # self.initial_marker_pose_theta = np.mean(marker_thetas)
+                # self.initial_marker_pose_x = np.mean(marker_poses)
+
 
             # if marker right turn 90 right, if marker left turn 90 left
             if self.initial_marker_pose_theta < 0.0:
@@ -269,7 +265,8 @@ class AutomaticParking():
                 desired_angle_turn = -(math.pi / 2.0) + self.initial_marker_pose_theta - (self.robot_2d_theta - self.initial_robot_pose_theta)
 
             desired_angle_turn = -1. * desired_angle_turn
-
+            
+            
             self.fnTurn(desired_angle_turn)
 
             # check turn angle threshold
@@ -280,8 +277,8 @@ class AutomaticParking():
 
         elif self.current_nearby_sequence == self.NearbySequence.go_straight.value:
             dist_from_start = self.fnCalcDistPoints(self.initial_robot_pose_x, self.robot_2d_pose_x, self.initial_robot_pose_y, self.robot_2d_pose_y)
-
-            desired_dist = self.initial_marker_pose_x * abs(math.cos((math.pi / 2.) - self.initial_marker_pose_theta))
+        
+            desired_dist = (self.initial_marker_pose_x + 0.43) * abs(math.cos((math.pi / 2.) - self.initial_marker_pose_theta))
             remained_dist = desired_dist - dist_from_start
             self.fnGoStraight()
             if remained_dist < 0.01:
@@ -402,10 +399,10 @@ class AutomaticParking():
 
         theta = theta + math.pi / 2.
 
-        if theta < 0:
-            theta = theta + math.pi * 2
-        if theta > math.pi * 2:
-            theta = theta - math.pi * 2
+        # if theta < 0:
+        #     theta = theta + math.pi * 2
+        # if theta > math.pi * 2:
+        #     theta = theta - math.pi * 2
 
         pos_x = marker_odom_msg.pose.pose.position.x
         pos_y = marker_odom_msg.pose.pose.position.y
@@ -427,14 +424,18 @@ class AutomaticParking():
         twist.angular.z = 0
         self.pub_cmd_vel.publish(twist)
 
-    def spawn_charge(self, dist):
-        from gazebo_msgs.srv import SpawnModel
-        from geometry_msgs.msg import Pose
-        print(dist)
+    def spawn_charge(self, x, y, a):
+        print(x, a)
+        quaternion = quaternion_from_euler(0,0,a)
 
         initial_pose = Pose()
-        initial_pose.position.x = 0
-        initial_pose.position.y = - dist - 0.38 # 5.25 - 0 m
+        initial_pose.position.x = x - 0.43
+        initial_pose.position.y = y # 5.25 - 0 m
+        initial_pose.orientation.x = quaternion[0]
+        initial_pose.orientation.y = quaternion[1]
+        initial_pose.orientation.z = quaternion[2]
+        initial_pose.orientation.w = quaternion[3]
+
         f = open('/home/andrey/.gazebo/models/charge/model.sdf','r')
         sdff = f.read()
 
@@ -443,12 +444,336 @@ class AutomaticParking():
         spawn_model_prox("Charge", sdff, "Charge_space", initial_pose, "world") 
 
     def delete_model(self):
-        from gazebo_msgs.srv import DeleteModel
         model_name = "Charge"
-        
         rospy.wait_for_service('gazebo/delete_model')
         delete_model_prox = rospy.ServiceProxy('gazebo/delete_model', DeleteModel)
         delete_model_prox(model_name) 
+
+    def move_model(self, x, y, a):
+        rospy.wait_for_service('/gazebo/set_model_state')
+        move_model_prox = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+        state = ModelState()
+        state.model_name = "courier_solid"
+        state.pose.position.x = x
+        state.pose.position.y = y
+        quaternion = quaternion_from_euler(0,0,a)
+        state.pose.orientation.x = quaternion[0]
+        state.pose.orientation.y = quaternion[1]
+        state.pose.orientation.z = quaternion[2]
+        state.pose.orientation.w = quaternion[3]
+        move_model_prox(state)
+
+        br = tf.TransformBroadcaster()
+
+        tr = TransformStamped()
+        tr.header.frame_id = "world"
+        tr.child_frame_id = "robot"
+        tr.transform.translation.x = x + 0.43
+        tr.transform.translation.y = y
+        tr.transform.rotation.x = quaternion[0]
+        tr.transform.rotation.y = quaternion[1]
+        tr.transform.rotation.z = quaternion[2]
+        tr.transform.rotation.w = quaternion[3]
+
+        initial_pose = PoseStamped()
+        initial_pose.header.frame_id = "world"
+        initial_pose.pose.position.x = - 0.7
+        initial_pose.pose.position.y = 0.2
+        quaternion1 = quaternion_from_euler(0,0,0)
+        initial_pose.pose.orientation.x = quaternion1[0] 
+        initial_pose.pose.orientation.y = quaternion1[1]
+        initial_pose.pose.orientation.z = quaternion1[2] 
+        initial_pose.pose.orientation.w = quaternion1[3] 
+        listener = tf.TransformListener()
+        listener.setTransform(tr)
+        initial_pose = listener.transformPose('robot', initial_pose)
+        marker_pose = initial_pose
+        return marker_pose
+        
+        
+
+    
+    def pol2cart(self, rho, phi):
+        x = rho * np.cos(phi)
+        y = rho * np.sin(phi)
+        return(x, y)
+
+    def sort_color(self,str):
+        if str == "red":
+            return 3
+        elif str == "blue":
+            return 1
+        elif str == "green":
+            return 2
+        
+    
+    def experiment(self):
+        import matplotlib.lines as lines
+        # self.delete_model()
+        s_x, s_y, s_a = -0.58,0,0
+        lim = 0.5
+        # self.spawn_charge(s_x, s_y, s_a)
+        # self.move_model(0, 0.25, 0)
+        robot_poses_x = []
+        robot_poses_y = []
+        robot_colors = []
+
+        centr_poses_x = []
+        centr_poses_y = []
+        centr_colors = []
+
+        robot_er_poses_x = []
+        robot_er_poses_y = []
+        robot_er_ang = []
+        robot_er_colors = []
+
+
+
+        # for i in range(1):
+        #     print(i)
+        #     r = random.uniform(0, 0.25)
+        #     phi = random.uniform(0, math.pi*2)
+        #     x,y = self.pol2cart(r, phi)
+        #     # ang = random.uniform(0, 0.13)
+        #     # x, y = 0.7,0.7
+        #     ang = math.atan2(y - s_y, x + 0.43 - s_x) 
+        #     # print(x,y,ang)
+            
+        #     marker_pose_real = self.move_model(x, y, ang)
+        #     go = False
+
+        #     time.sleep(0.2)
+
+        #     marker = rospy.wait_for_message("/ar_pose_marker", AlvarMarkers, 5)
+        #     if len(marker.markers) != 0:
+        #         quater = [marker.markers[0].pose.pose.orientation.x, marker.markers[0].pose.pose.orientation.y, marker.markers[0].pose.pose.orientation.z, marker.markers[0].pose.pose.orientation.w]
+        #         angs = euler_from_quaternion(quater)
+    
+        #         quater_real = [marker_pose_real.pose.orientation.x, marker_pose_real.pose.orientation.y, marker_pose_real.pose.orientation.z, marker_pose_real.pose.orientation.w]
+        #         angs_real = euler_from_quaternion(quater_real)
+        #         angle_error = abs(angs_real[2] - angs[2] + math.pi/2 - math.pi) 
+        #         pos_x_error = abs(marker_pose_real.pose.position.x - marker.markers[0].pose.pose.position.x)
+        #         pos_y_error = abs(marker_pose_real.pose.position.y - marker.markers[0].pose.pose.position.y)
+        #         m_a = angs[2] + math.pi/2.0
+        #         if m_a < 0:
+        #             desired_angle_turn = math.pi/2.0 + m_a
+        #         elif m_a > 0:
+        #             desired_angle_turn = -math.pi/2.0 + m_a
+        #         desired_angle_turn = -1 * desired_angle_turn
+        #         desired_dist = (marker.markers[0].pose.pose.position.x + 0.43) * abs(math.cos((math.pi/2.0) - m_a)) 
+        #         p_x, p_y = self.pol2cart(desired_dist, desired_angle_turn)
+        #         print(p_x, p_y)
+        #         centr_poses_x.append(x + p_x)
+        #         centr_poses_y.append(y + p_y)
+  
+        #         if -0.111 * (x + p_x) - (y + p_y) - 0.0778 < 0.0:
+        #             j += 1
+        #             centr_colors.append("black")
+        #         elif 0.111 * (x + p_x) - (y + p_y) + 0.0778 < 0.0:
+        #             j += 1
+        #             centr_colors.append("black")
+        #         else:
+        #             centr_colors.append("red")
+        #             robot_er_poses_x.append(x)
+        #             robot_er_poses_y.append(y)
+        #             robot_er_ang.append(ang)
+        #             if angle_error < 0.017:
+        #                 robot_er_colors.append("green")
+        #             elif 0.017 < angle_error < 0.087:
+        #                 robot_er_colors.append("blue")
+        #             elif angle_error > 0.087:
+        #                 robot_er_colors.append("red")
+                    
+        #         # print(angle_error)
+
+        #         robot_poses_x.append(x)
+        #         robot_poses_y.append(y)
+        #         if angle_error < 0.017:
+        #             robot_colors.append("green")
+        #         elif 0.017 < angle_error < 0.087:
+        #             robot_colors.append("blue")
+        #         elif angle_error > 0.087:
+        #             robot_colors.append("red")
+
+
+        f= open("/home/andrey/exp_results/centr_pose_x.txt","r")
+        while True: 
+            line = f.readline() 
+            if not line: 
+                break
+            centr_poses_x.append(float(line))
+        f.close()
+        f= open("/home/andrey/exp_results/centr_pose_y.txt","r")
+        while True: 
+            line = f.readline() 
+            if not line: 
+                break
+            centr_poses_y.append(float(line))
+        f.close()
+        f= open("/home/andrey/exp_results/centr_pose_color.txt","r")
+        while True: 
+            line = f.readline() 
+            if not line: 
+                break
+            centr_colors.append(str(line).strip())
+        f.close()
+        f= open("/home/andrey/exp_results/robot_pose_x.txt","r")
+        while True: 
+            line = f.readline() 
+            if not line: 
+                break
+            robot_poses_x.append(float(line))
+        f.close() 
+        f= open("/home/andrey/exp_results/robot_pose_y.txt","r")
+        while True: 
+            line = f.readline() 
+            if not line: 
+                break
+            robot_poses_y.append(float(line))
+        f.close()
+        f= open("/home/andrey/exp_results/robot_pose_color.txt","r")
+        while True: 
+            line = f.readline() 
+            if not line: 
+                break
+            robot_colors.append(str(line).strip())
+        f.close()
+
+        fig1 = plt.figure(1)
+        ax = fig1.add_axes([0.07,0.07,1,1])
+        ax.set_xlim(-lim,lim)
+        ax.set_ylim(-lim, lim)
+
+        shift = 0
+        circle1 = plt.Circle((0, 0), 0.25, fill=False)
+        line = lines.Line2D([s_x + shift , s_x + 2 + shift], [s_y, s_y + 0.3],
+                    lw=3, color='black', axes=ax)
+        line2 = lines.Line2D([s_x + shift, s_x + 2 + shift], [s_y, s_y - 0.3],
+                    lw=3, color='black', axes=ax)
+        line3 = lines.Line2D([-1, 1], [s_y, s_y],
+                    lw=2, color='green', axes=ax)
+        ax.add_artist(circle1)
+        ax.add_artist(line)
+        ax.add_artist(line2)
+        ax.add_artist(line3)
+        ax.scatter(x = centr_poses_x, y = centr_poses_y, s = 4**2, c = centr_colors)
+        
+        fig2 = plt.figure(2)
+        ax2 = fig2.add_axes([0.07,0.07,1,1])
+        ax2.set_xlim(-lim,lim)
+        ax2.set_ylim(-lim, lim)
+        circle1 = plt.Circle((0, 0), 0.25, fill=False)
+        line = lines.Line2D([s_x , s_x + 2], [s_y, s_y + 0.3],
+                    lw=3, color='black', axes=ax2)
+        line2 = lines.Line2D([s_x , s_x + 2], [s_y, s_y - 0.3],
+                    lw=3, color='black', axes=ax2)
+        line3 = lines.Line2D([-1, 1], [s_y, s_y],
+                    lw=2, color='green', axes=ax2)
+        ax2.add_artist(circle1)
+        ax2.add_artist(line)
+        ax2.add_artist(line2)
+        ax2.add_artist(line3)
+        robot_colors.sort(key = self.sort_color)
+        indices = sorted(range(len(robot_colors)), key=robot_colors.__getitem__)
+        from operator import itemgetter
+        sorted_by_robot_colors = itemgetter(*indices)
+        robot_poses_x = sorted_by_robot_colors(robot_poses_x)
+        robot_poses_y = sorted_by_robot_colors(robot_poses_y)
+        ax2.scatter(x = robot_poses_x, y = robot_poses_y, s = 4**2, c = robot_colors)
+
+        # fig3 = plt.figure(3)
+        # ax3 = fig3.add_axes([0.07,0.07,1,1])
+        # ax3.set_xlim(-lim,lim)
+        # ax3.set_ylim(-lim, lim)
+        # circle1 = plt.Circle((0, 0), 0.25, fill=False)
+        # line = lines.Line2D([s_x , s_x + 2], [s_y, s_y + 0.3],
+        #             lw=3, color='black', axes=ax3)
+        # line2 = lines.Line2D([s_x , s_x + 2], [s_y, s_y - 0.3],
+        #             lw=3, color='black', axes=ax3)
+        # line3 = lines.Line2D([-1, 1], [s_y, s_y],
+        #             lw=2, color='green', axes=ax3)
+        # ax3.add_artist(circle1)
+        # ax3.add_artist(line)
+        # ax3.add_artist(line2)
+        # ax3.add_artist(line3)
+        # ax3.scatter(x = robot_er_poses_x, y = robot_er_poses_y, s = 7**2, c = robot_er_colors)
+
+        # f= open("/home/andrey/exp_results/centr_pose_x.txt","w")
+        # for p in centr_poses_x:
+        #     f.write(str(p) + '\n')
+        # f.close()
+        # f= open("/home/andrey/exp_results/centr_pose_y.txt","w")
+        # for p in centr_poses_y:
+        #     f.write(str(p) + '\n')
+        # f.close()
+        # f= open("/home/andrey/exp_results/centr_pose_color.txt","w")
+        # for p in centr_colors:
+        #     f.write(str(p) + '\n')
+        # f.close()
+        # f= open("/home/andrey/exp_results/robot_pose_x.txt","w")
+        # for p in robot_poses_x:
+        #     f.write(str(p) + '\n')
+        # f.close() 
+        # f= open("/home/andrey/exp_results/robot_pose_y.txt","w")
+        # for p in robot_poses_y:
+        #     f.write(str(p) + '\n')
+        # f.close()
+        # f= open("/home/andrey/exp_results/robot_pose_color.txt","w")
+        # for p in robot_colors:
+        #     f.write(str(p) + '\n')
+        # f.close() 
+
+        plt.show()
+
+
+        # fig = plt.figure()
+        # i = 1
+        # self.distance = []
+        # self.marker_poses = []
+        # self.real_merker_poses = []
+        # self.errors = []
+        # for a in np.arange(-0.79, 0.79, 0.087):
+        #     self.error = []
+        #     a = round(a, 2)
+        #     for x in np.arange(0.5,1.90,0.1):
+        #         x = round(x, 2)
+        #         self.spawn_charge(x, 0, a)
+        #         time.sleep(1)
+        #         marker = rospy.wait_for_message("/ar_pose_marker", AlvarMarkers, 5)
+        #         if len(marker.markers) != 0:
+        #             self.marker_poses.append(a)
+        #             quater = [marker.markers[0].pose.pose.orientation.x, marker.markers[0].pose.pose.orientation.y, marker.markers[0].pose.pose.orientation.z, marker.markers[0].pose.pose.orientation.w]
+        #             angs = euler_from_quaternion(quater)
+        #             self.real_merker_poses.append(angs[2] + math.pi/2)     
+        #             self.error.append(abs(abs(a) - abs(angs[2] + math.pi/2)))
+        #             self.distance.append(x)
+        #         self.delete_model()
+        #     self.errors.append(self.error)
+        #     # subp = plt.subplot(4,2,i)
+        #     # subp.set_title("Distance " + str(x))
+        #     # plt.plot(self.marker_poses, self.errors)
+        #     # plt.ylabel("Angle error")
+        #     # plt.xlabel("Angle (rad)")
+        #     i += 1
+
+        # print("errors")
+        # print(self.errors)
+        # print("dist")
+        # print(self.distance)
+        # print("angle")
+        # print(self.marker_poses)
+
+        # fig = go.Figure(data=[go.Surface(z=self.errors, x=self.distance, y=self.marker_poses)])
+        # fig.update_layout(title='Errors', autosize=True,
+        #           width=500, height=500,
+        #           margin=dict(l=65, r=50, b=65, t=90))
+        # fig.show()
+        # ax = fig.add_subplot(111, projection='3d')
+        # ax.plot_surface(self.distance, self.marker_poses, self.errors, cmap='inferno')
+        # ax.legend()
+        # plt.show()
+
+
 
     def main(self):
         rospy.spin()

@@ -15,9 +15,17 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   ar_track_alvar_msgs
   ar_track_alvar
+  actionlib_msgs
 )
 
+add_action_files(
+  DIRECTORY actions
+  FILES parking.action
+)
 
+generate_messages(
+  DEPENDENCIES actionlib_msgs std_msgs  # Or other packages containing msgs
+)
 ################################################################################
 # Declare ROS messages, services and actions
 ################################################################################
@@ -30,7 +38,7 @@ find_package(catkin REQUIRED COMPONENTS
 # Declare catkin specific configuration to be passed to dependent projects
 ################################################################################
 catkin_package(
-  CATKIN_DEPENDS rospy std_msgs sensor_msgs geometry_msgs nav_msgs ar_track_alvar ar_track_alvar_msgs
+  CATKIN_DEPENDS rospy std_msgs sensor_msgs geometry_msgs nav_msgs ar_track_alvar ar_track_alvar_msgs actionlib_msgs
 )
 
 ################################################################################

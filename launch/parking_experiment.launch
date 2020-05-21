@@ -1,0 +1,81 @@
+<launch>
+	<arg name="is_test_postman"  default="False"  />
+	<arg name="is_ai_journey_mode"  default="False"  />
+	<arg name="is_bootcamp_demo_mode"  default="False"  />
+	<arg name="is_bootcamp_demo_2_mode"  default="False"  />
+	<arg name="is_disinfector_demo_mode"  default="False" />
+  <arg name="is_disinfector_pilot_mode"   default="False" />
+	<arg name="is_vavilova_mode"  default="False"  />
+	<arg name="is_coffee_mode"  default="False"  />
+	<arg name="sm_execute"  default="sm_main"  />
+	<arg name="is_dam_demonstration_mode"  default="False"  />
+	<arg name="is_verify_one_person"   default="False"  />
+	<arg name="special_person" default = "Gref_G_O" />
+	<arg name="is_admin"  default="False"  />
+	<arg name="sm_recycling_time"  default="0"  />
+	<arg name="location_map"  default="hall"  />
+	<arg name="map"  default="willow_garage_with_street"  />
+	<arg name="multi_robot_name" default=""/>
+	<arg name="x_pos" default="9.49923" />
+	<arg name="y_pos" default="-4.8803" />
+	<arg name="z_pos" default="0" />
+  	<arg name="a_pos" default="1.57" />
+	<arg name="is_servicesim" default="False" />
+	<arg name="use_gui" default="true" />
+	<arg name="model" default="solid" />
+  <arg name="use_rviz"  default="False" />
+
+  <arg name="rms_mode"        default="remote-only"   />
+  <arg name="rms_timerPin"    default="60"   />
+  <arg name="rms_sendsms"     default="false"   />
+
+	<group>
+		<include file="$(find gazebo_ros)/launch/empty_world.launch">
+			<arg name="world_name" value="$(find courier_gazebo)/worlds/courier_willow_garage.world" />
+			<arg name="paused" value="false" />
+			<arg name="gui" value="$(arg use_gui)" />
+			<arg name="headless" value="false" />
+			<arg name="recording" value="false" />
+			<arg name="debug" value="false" />
+		</include>
+	</group>
+
+	<param name="robot_description"
+		command="$(find xacro)/xacro $(find courier_description)/urdf/courier_$(arg model).urdf.xacro --inorder" />
+
+	<node pkg="joint_state_publisher" type="joint_state_publisher" name="joint_state_publisher">
+		<param name="use_gui" value="false"/>
+		<param name="rate" value="50"/>
+	</node>
+
+	<node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
+		<param name="publish_frequency" type="double" value="50.0" />
+	</node>
+
+	<node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
+		args="-urdf -model courier_solid -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -Y $(arg a_pos) -param robot_description" />
+
+<!--
+  <include file="$(find courier_bringup)/launch/courier_laser_filter.launch">
+    <arg name="multi_robot_name" value="$(arg multi_robot_name)"/>
+  </include>
+-->
+
+  <node pkg="ros_status" type="node.py" name="ros_status_node" output="screen" clear_params="true">
+    <param name = "ping_rate"  value = "20" />
+  </node>
+
+
+  <include file="$(find courier_file_server)/launch/courier_file_server.launch" >
+    <arg name="current_directory"  default="$(find courier_maps)/maps/$(arg map)"  />
+  </include>
+
+  <include file="$(find courier_odom_server)/launch/odom_server.launch" >
+  </include>
+
+  <include file="$(find statistic_logger)/launch/logger.launch" >
+  </include>
+
+  <node pkg="rosservice" type="rosservice" name="pause_physics" args="call --wait /gazebo/pause_physics" />
+
+</launch>
